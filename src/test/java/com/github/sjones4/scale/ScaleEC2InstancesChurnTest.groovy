@@ -197,6 +197,12 @@ class ScaleEC2InstancesChurnTest {
                     instanceState
                   } else if ( instanceState == 'pending' ) {
                     null
+                  } else if ( instanceState == null && iter < 5 ) {
+                    print( "[${thread}] Null instance state ${count} ${instanceId}, treating as pending" )
+                    null
+                  } else if ( instanceState == null ) {
+                    print( "[${thread}] Null instance state ${count} ${instanceId}, treating as running (will attempt terminate)" )
+                    'running'
                   } else {
                     fail( "Unexpected instance ${count} ${instanceId} state ${instanceState}"  )
                   }
@@ -230,6 +236,9 @@ class ScaleEC2InstancesChurnTest {
                     instanceState
                   } else if ( instanceState == 'shutting-down' ) {
                     null
+                  } else if ( instanceState == null ) {
+                    print( "[${thread}] Null instance state ${count} ${instanceId}, treating as terminated" )
+                    'terminated'
                   } else {
                     println( "Unexpected instance ${count} ${instanceId} state ${instanceState}"  )
                     instanceState // try to continue?
