@@ -34,7 +34,7 @@ import com.github.sjones4.youcan.youare.YouAreClient
 import com.github.sjones4.youcan.youare.model.CreateAccountRequest
 import com.github.sjones4.youcan.youare.model.DeleteAccountRequest
 import org.junit.Test
-import sun.security.x509.CertAndKeyGen
+import sun.security.tools.keytool.CertAndKeyGen
 import sun.security.x509.X500Name
 
 import java.security.cert.X509Certificate
