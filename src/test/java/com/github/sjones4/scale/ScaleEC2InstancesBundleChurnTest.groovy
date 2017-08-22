@@ -199,7 +199,7 @@ class ScaleEC2InstancesBundleChurnTest {
                     keyName: key,
                     minCount: 1,
                     maxCount: 1,
-                    clientToken: "${namePrefix}${thread}"
+                    clientToken: "${namePrefix}${thread}-0"
                 )).with {
                   reservation?.instances?.each { Instance instance ->
                     cleanupTasks.add {
@@ -236,8 +236,10 @@ class ScaleEC2InstancesBundleChurnTest {
                   String uploadPolicySignature = Base64.encoder.encodeToString( digest.doFinal( encodedUploadPolicy.getBytes(StandardCharsets.UTF_8) ) )
 
                   boolean retry = true
+                  int retryCount = 0
                   while ( retry ) {
                     try {
+                      retryCount++
                       bundleInstance(new BundleInstanceRequest(instanceId: instanceId, storage: new Storage(
                           s3: new S3Storage(
                               bucket: bucket,
@@ -249,10 +251,76 @@ class ScaleEC2InstancesBundleChurnTest {
                       )))
                       retry = false
                     } catch ( AmazonServiceException e ) {
-                       if ( 'BundlingInProgress'.equals( e.getErrorCode( ) ) ) {
-                         print("[${thread}] Bundle instance request failed (in-progress), will retry ${instanceId} ${count}")
+                       if ( retryCount > 9 ) {
+                         throw e
+                       } else if ( 'BundlingInProgress' == e.getErrorCode( ) ) {
+                         if ( retryCount > 5 ) {
+                           print("[${thread}] Bundle instance request failed (in-progress), will cancel(${retryCount}) ${instanceId} ${count}")
+                           describeBundleTasks(new DescribeBundleTasksRequest(
+                               filters: [
+                                   new Filter(name: 'instance-id', values: [instanceId]),
+                               ]
+                           )).with {
+                             bundleTasks?.each { BundleTask task ->
+                               if (task.instanceId == instanceId) {
+                                 try {
+                                   cancelBundleTask( new CancelBundleTaskRequest( bundleId: task.bundleId ) )
+                                   sleep(25000)
+                                 } catch ( AmazonServiceException e2 ) {
+                                   print("[${thread}] Bundle instance task cancel failed ${instanceId} ${count}: ${e.errorMessage}")
+                                   if ( retryCount > 7 ) {
+                                     print("[${thread}] Bundle instance task cancel failed, terminating instance ${instanceId} ${count}: ${e.errorMessage}")
+                                     terminateInstances( new TerminateInstancesRequest( instanceIds: [ instanceId ] ) )
+                                     // should hit InvalidState and launch a replacement
+                                   }
+                                 }
+                               }
+                             }
+                           }
+                         } else {
+                           print("[${thread}] Bundle instance request failed (in-progress), will retry(${retryCount}) ${instanceId} ${count}")
+                         }
                          sleep(5000)
-                         retry = true;
+                       } else if ( 'InvalidState' == e.getErrorCode( ) ) {
+                         if ( retryCount > 5 ) {
+                           print("[${thread}] Launching replacement instance for ${instanceId} ${count}")
+                           runInstances(new RunInstancesRequest(
+                               imageId: imageId,
+                               instanceType: instanceType,
+                               placement: new Placement(
+                                   availabilityZone: availabilityZone
+                               ),
+                               keyName: key,
+                               minCount: 1,
+                               maxCount: 1,
+                               clientToken: "${namePrefix}${thread}-${count}"
+                           )).with {
+                             reservation?.instances?.each { Instance instance ->
+                               cleanupTasks.add {
+                                 terminateInstances(new TerminateInstancesRequest(
+                                     instanceIds: [instance.instanceId]
+                                 ))
+                               }
+                               instanceId = instance.instanceId
+                             }
+                           }
+
+                           (1..100).find { Integer iter ->
+                             sleep(5000)
+                             print("[${thread}] Waiting for instance ${instanceId} to be running (${5 * iter}s)")
+                             String instanceState = getInstanceState(instanceId)
+                             if (instanceState == 'running') {
+                               instanceState
+                             } else if (instanceState == 'pending') {
+                               null
+                             } else {
+                               fail("Unexpected instance ${instanceId} state ${instanceState}")
+                             }
+                           }
+                         } else {
+                           print("[${thread}] Bundle instance request failed (invalid instance state), will retry(${retryCount}) ${instanceId} ${count}")
+                           sleep(5000)
+                         }
                        } else {
                          throw e
                        }
@@ -278,6 +346,9 @@ class ScaleEC2InstancesBundleChurnTest {
                     }
                     if (bundlingState == 'complete') {
                       bundlingState
+                    } else if (bundlingState == 'failed' || bundlingState == 'canceling') {
+                      print("[${thread}] Bundling failed for instance ${instanceId} ${count}, due to state ${bundlingState}")
+                      bundlingState
                     } else if ( bundlingState == 'pending' ||
                         bundlingState == 'waiting-for-shutdown' ||
                         bundlingState == 'bundling' ||
@@ -290,10 +361,19 @@ class ScaleEC2InstancesBundleChurnTest {
                   }
 
                   print("[${thread}] Deleting bundle artifacts ${instanceId} ${count}")
-                  listObjects( bucket ).with {
-                    objectSummaries.each{ summary ->
-                      print("[${thread}] Deleting bundle artifact ${summary.key} from ${bucket} for ${instanceId} ${count}")
-                      deleteObject( bucket, summary.key )
+                  try {
+                    listObjects( bucket ).with {
+                      objectSummaries.each{ summary ->
+                        print("[${thread}] Deleting bundle artifact ${summary.key} from ${bucket} for ${instanceId} ${count}")
+                        deleteObject( bucket, summary.key )
+                      }
+                    }
+                  } catch ( AmazonServiceException e ) {
+                    if ( 'NoSuchBucket' == e.getErrorCode( ) ) {
+                      print("[${thread}] Bucket ${bucket} was deleted for ${instanceId} ${count}, re-creating")
+                      createBucket( bucket )
+                    } else {
+                      throw e
                     }
                   }
                 }
