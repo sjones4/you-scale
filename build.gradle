@@ -39,14 +39,14 @@ repositories {
 }
 
 dependencies {
-  compile 'com.amazonaws:aws-java-sdk-autoscaling:1.10.+'
-  compile 'com.amazonaws:aws-java-sdk-cloudformation:1.10.+' 
-  compile 'com.amazonaws:aws-java-sdk-ec2:1.10.+'
-  compile 'com.amazonaws:aws-java-sdk-iam:1.10.+'
-  compile 'com.amazonaws:aws-java-sdk-sts:1.10.+'
-  compile 'com.amazonaws:aws-java-sdk-s3:1.10.+'
-  compile 'com.github.sjones4:you-are-sdk:1.0.7'
-  compile 'com.google.guava:guava:18.0'
+  compile 'com.amazonaws:aws-java-sdk-autoscaling:1.11.+'
+  compile 'com.amazonaws:aws-java-sdk-cloudformation:1.11.+'
+  compile 'com.amazonaws:aws-java-sdk-ec2:1.11.+'
+  compile 'com.amazonaws:aws-java-sdk-iam:1.11.+'
+  compile 'com.amazonaws:aws-java-sdk-sts:1.11.+'
+  compile 'com.amazonaws:aws-java-sdk-s3:1.11.+'
+  compile 'com.github.sjones4:you-are-sdk:1.2.0'
+  compile 'com.google.guava:guava:24.0-jre'
   compile 'org.codehaus.groovy:groovy-all:2.4.+'
   compile 'junit:junit:4.+'
 }
