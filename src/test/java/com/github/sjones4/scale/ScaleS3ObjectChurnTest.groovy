@@ -17,9 +17,9 @@ package com.github.sjones4.scale
 import com.amazonaws.ClientConfiguration
 import com.amazonaws.Request
 import com.amazonaws.auth.AWSCredentialsProvider
+import com.amazonaws.auth.AWSStaticCredentialsProvider
 import com.amazonaws.auth.BasicAWSCredentials
-import com.amazonaws.handlers.AbstractRequestHandler
-import com.amazonaws.internal.StaticCredentialsProvider
+import com.amazonaws.handlers.RequestHandler2
 import com.amazonaws.services.identitymanagement.model.CreateAccessKeyRequest
 import com.amazonaws.services.s3.AmazonS3
 import com.amazonaws.services.s3.AmazonS3Client
@@ -28,6 +28,8 @@ import com.amazonaws.services.s3.model.PutObjectRequest
 import com.github.sjones4.youcan.youare.YouAreClient
 import com.github.sjones4.youcan.youare.model.CreateAccountRequest
 import com.github.sjones4.youcan.youare.model.DeleteAccountRequest
+import com.google.common.collect.Iterators
+import com.google.common.io.ByteSource
 import com.google.common.io.ByteStreams
 import org.junit.Assert
 import org.junit.Test
@@ -44,7 +46,7 @@ class ScaleS3ObjectChurnTest {
   private final AWSCredentialsProvider eucalyptusCredentials
 
   ScaleS3ObjectChurnTest( ) {
-    this.eucalyptusCredentials = new StaticCredentialsProvider( new BasicAWSCredentials(
+    this.eucalyptusCredentials = new AWSStaticCredentialsProvider( new BasicAWSCredentials(
         Objects.toString( System.getenv('AWS_ACCESS_KEY_ID'),     System.getenv('AWS_ACCESS_KEY') ),
         Objects.toString( System.getenv('AWS_SECRET_ACCESS_KEY'), System.getenv('AWS_SECRET_KEY') )
     ) )
@@ -95,14 +97,14 @@ class ScaleS3ObjectChurnTest {
 
         // Get credentials for new account
         AWSCredentialsProvider accountCredentials = getYouAreClient().with {
-          addRequestHandler(new AbstractRequestHandler() {
+          addRequestHandler(new RequestHandler2() {
             void beforeRequest(final Request<?> request) {
               request.addParameter("DelegateAccount", accountName)
             }
           })
           createAccessKey(new CreateAccessKeyRequest(userName: "admin")).with {
             accessKey?.with {
-              new StaticCredentialsProvider(new BasicAWSCredentials(accessKeyId, secretAccessKey))
+              new AWSStaticCredentialsProvider(new BasicAWSCredentials(accessKeyId, secretAccessKey))
             }
           }
         }
@@ -120,6 +122,8 @@ class ScaleS3ObjectChurnTest {
         }
       }
 
+      final byte[] data = new byte[ 1024 * 1024 /*    1MiB */ ]
+      final ByteSource byteSource = ByteSource.wrap( data )
       final List<List<Number>> churnOpts = [
           // object size,                #obj, #threads up, #down
         [ 1024 * 1024 * 10    /*    10MiB */, 75, 15, 30 ],
@@ -129,30 +133,29 @@ class ScaleS3ObjectChurnTest {
       ]
       churnOpts.each { long size, int objects, int uploadThreads, int downloadThreads ->
         final int threads = uploadThreads
-        final int iterations = objects / threads
+        final int iterations = ( objects / threads ) as Integer
 
-        print("Churning ${iterations} object put/get/delete on ${threads} threads")
+        print("Churning ${iterations} object put/get/delete(s) on ${threads} threads")
         final CountDownLatch latch = new CountDownLatch(threads)
         final AtomicInteger successCount = new AtomicInteger(0)
-        final byte[] data = new byte[size]
         (1..threads).each { Integer thread ->
           Thread.start {
             try {
               getS3Client( accountCredentials ).with {
                 for (int i = 0; i < iterations; i++) {
                   String key = "${namePrefix}object-${thread}-${i}"
-                  print("[${thread}] putting object ${key} length ${data.length}")
+                  print("[${thread}] putting object ${key} length ${size} ${i+1}/${iterations}")
                   putObject(new PutObjectRequest(
                       bucketName,
                       key,
-                      new ByteArrayInputStream(data),
-                      new ObjectMetadata(contentLength: data.length)
+                      ByteSource.concat( Iterators.limit( Iterators.cycle( byteSource ), (size / data.length) as Integer ) ).openStream( ),
+                      new ObjectMetadata(contentLength: size)
                   ))
 
-                  print("[${thread}] getting object ${key}")
+                  print("[${thread}] getting object ${key} ${i+1}/${iterations}")
                   ByteStreams.copy(getObject(bucketName, key).getObjectContent(), ByteStreams.nullOutputStream())
 
-                  print("[${thread}] deleting object ${key}")
+                  print("[${thread}] deleting object ${key} ${i+1}/${iterations}")
                   deleteObject(bucketName, key)
                 }
                 successCount.incrementAndGet()
@@ -165,16 +168,16 @@ class ScaleS3ObjectChurnTest {
         latch.await()
         Assert.assertEquals( "Threads completed", threads, successCount.get( ) )
 
-        int downloadCount = (objects * 10) / downloadThreads
-        print("Churning ${downloadCount} object gets on ${downloadThreads} threads")
+        int downloadCount = ( (objects * 10) / downloadThreads ) as Integer
+        print("Performing ${downloadCount} object gets on ${downloadThreads} threads")
         final String key = "${namePrefix}object"
-        print("Putting object ${key} length ${data.length}")
+        print("Putting object ${key} length ${size}")
         getS3Client( accountCredentials ).with {
           putObject(new PutObjectRequest(
               bucketName,
               key,
-              new ByteArrayInputStream(data),
-              new ObjectMetadata(contentLength: data.length)
+              ByteSource.concat( Iterators.limit( Iterators.cycle( byteSource ), (size / data.length) as Integer ) ).openStream( ),
+              new ObjectMetadata(contentLength: size)
           ))
 
         }
@@ -185,11 +188,11 @@ class ScaleS3ObjectChurnTest {
             try {
               getS3Client( accountCredentials ).with {
                 for (int i = 0; i < downloadCount; i++) {
-                  print("[${thread}] getting object ${key} ${i}/${downloadCount}")
+                  print("[${thread}] getting object ${key} ${i+1}/${downloadCount}")
                   try {
                     ByteStreams.copy(getObject(bucketName, key).getObjectContent(), ByteStreams.nullOutputStream())
                   } catch( e ) {
-                    print( "[${thread}] Error getting object  ${key} ${i}/${downloadCount}: ${e}" )
+                    print( "[${thread}] Error getting object  ${key} ${i+1}/${downloadCount}: ${e}" )
                     Assert.fail( "error" )
                   }
                 }
