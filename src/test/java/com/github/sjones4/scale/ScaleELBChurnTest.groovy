@@ -202,12 +202,6 @@ class ScaleELBChurnTest {
     Assert.assertNotNull( 'Load balancer instance type not found', elbInstanceType )
     print( "Found elb instance type: ${elbInstanceType}" )
 
-    // Find a key pair
-    final String key = ec2.describeKeyPairs( ).with {
-      keyPairs?.getAt( 0 )?.keyName
-    }
-    print( "Using key: ${key}" )
-
     // Find dns hosts
     Set<String> dnsHosts = getDnsHosts(getServicesClient())
     print( "Using dns endpoints: ${dnsHosts}" )
@@ -298,7 +292,6 @@ class ScaleELBChurnTest {
             minCount: 1,
             maxCount: 1,
             imageId: imageId,
-            keyName: key,
             securityGroupIds: [instanceGroupId],
             userData: Base64.encoder.encodeToString(userDataText.getBytes(StandardCharsets.UTF_8))
         )).with {
@@ -458,7 +451,19 @@ class ScaleELBChurnTest {
                   }
                 } finally {
                   print("[${thread}] Deleting load balancer ${count}/${elbIterations} ${loadBalancerName}")
-                  deleteLoadBalancer(new DeleteLoadBalancerRequest(loadBalancerName: loadBalancerName))
+                  for ( int i=0; i<12; i++ ) {
+                    try {
+                      deleteLoadBalancer(new DeleteLoadBalancerRequest(loadBalancerName: loadBalancerName))
+                      break
+                    } catch ( e ) {
+                      if ( e.message.contains( 'Failed to delete' ) ) {
+                        print("[${thread}] Delete failed, will retry in 5s deleting load balancer ${count}/${elbIterations} ${loadBalancerName}")
+                        sleep 5000
+                      } else {
+                        throw e
+                      }
+                    }
+                  }
                 }
               }
             }
